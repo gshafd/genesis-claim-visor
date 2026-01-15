@@ -4,10 +4,11 @@ import { WorkflowStep } from './WorkflowStep';
 import { ExternalCheckCard } from './ExternalCheckCard';
 import { RulesEvaluationStep, RuleResult } from './RulesEvaluationStep';
 import { ManualReviewActions } from './ManualReviewActions';
-import { Cloud, Car, History, Shield, FileText, Brain, Zap, CheckCircle2 } from 'lucide-react';
+import { LLMSeverityCard } from './LLMSeverityCard';
+import { Cloud, Car, History, Shield, Brain, Zap, CheckCircle2 } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
-import { getRulesForClaim } from '@/data/rulesEngine';
+import { getRulesForClaim, getLLMSeverityForClaim, LLMSeverityData } from '@/data/rulesEngine';
 import { toast } from '@/hooks/use-toast';
 
 interface WorkflowViewProps {
@@ -21,6 +22,7 @@ interface StepState {
   parsing: StepStatus;
   external: StepStatus;
   rules: StepStatus;
+  llmSeverity: StepStatus;
   analysis: StepStatus;
 }
 
@@ -30,11 +32,13 @@ export function WorkflowView({ claim }: WorkflowViewProps) {
     parsing: 'pending',
     external: 'pending',
     rules: 'pending',
+    llmSeverity: 'pending',
     analysis: 'pending',
   });
 
   const [visibleSteps, setVisibleSteps] = useState(0);
   const [rulesData, setRulesData] = useState<RuleResult[]>([]);
+  const [llmSeverityData, setLlmSeverityData] = useState<LLMSeverityData | null>(null);
   const [showActions, setShowActions] = useState(false);
 
   useEffect(() => {
@@ -44,13 +48,15 @@ export function WorkflowView({ claim }: WorkflowViewProps) {
       parsing: 'pending',
       external: 'pending',
       rules: 'pending',
+      llmSeverity: 'pending',
       analysis: 'pending',
     });
     setVisibleSteps(0);
     setShowActions(false);
     
-    // Load rules for this claim
+    // Load rules and LLM severity for this claim
     setRulesData(getRulesForClaim(claim.id));
+    setLlmSeverityData(getLLMSeverityForClaim(claim.id));
 
     const timers: NodeJS.Timeout[] = [];
 
@@ -94,20 +100,30 @@ export function WorkflowView({ claim }: WorkflowViewProps) {
       setSteps(s => ({ ...s, rules: 'completed' }));
     }, 8000));
 
-    // Step 5: Analysis
+    // Step 5: LLM Severity
     timers.push(setTimeout(() => {
       setVisibleSteps(5);
-      setSteps(s => ({ ...s, analysis: 'processing' }));
+      setSteps(s => ({ ...s, llmSeverity: 'processing' }));
     }, 8500));
 
     timers.push(setTimeout(() => {
-      setSteps(s => ({ ...s, analysis: 'completed' }));
+      setSteps(s => ({ ...s, llmSeverity: 'completed' }));
     }, 10000));
+
+    // Step 6: Analysis
+    timers.push(setTimeout(() => {
+      setVisibleSteps(6);
+      setSteps(s => ({ ...s, analysis: 'processing' }));
+    }, 10500));
+
+    timers.push(setTimeout(() => {
+      setSteps(s => ({ ...s, analysis: 'completed' }));
+    }, 12000));
 
     // Show manual actions
     timers.push(setTimeout(() => {
       setShowActions(true);
-    }, 10500));
+    }, 12500));
 
     return () => timers.forEach(clearTimeout);
   }, [claim.id]);
@@ -288,7 +304,7 @@ export function WorkflowView({ claim }: WorkflowViewProps) {
           {/* Step 4: Rules Evaluation */}
           {visibleSteps >= 4 && (
             <WorkflowStep
-              title="Rules Evaluation (Dynamic)"
+              title="Rules Evaluation (R001–R011)"
               status={steps.rules}
               stepNumber={4}
               delay={0}
@@ -297,21 +313,33 @@ export function WorkflowView({ claim }: WorkflowViewProps) {
             </WorkflowStep>
           )}
 
-          {/* Step 5: Anomaly Analysis */}
-          {visibleSteps >= 5 && (
+          {/* Step 5: LLM Severity & Explanation */}
+          {visibleSteps >= 5 && llmSeverityData && (
+            <WorkflowStep
+              title="AI Severity & Explanation"
+              status={steps.llmSeverity}
+              stepNumber={5}
+              delay={0}
+            >
+              <LLMSeverityCard data={llmSeverityData} />
+            </WorkflowStep>
+          )}
+
+          {/* Step 6: Anomaly Analysis */}
+          {visibleSteps >= 6 && (
             <WorkflowStep
               title="Anomaly Analysis & Risk Assessment"
               status={steps.analysis}
-              stepNumber={5}
+              stepNumber={6}
               isLast
               delay={0}
             >
               <div className="space-y-4">
                 {(() => {
                   const triggeredCount = rulesData.filter(r => r.triggered).length;
-                  const riskScore = triggeredCount * 25;
-                  const isHighRisk = triggeredCount >= 3;
-                  const isMediumRisk = triggeredCount >= 1 && triggeredCount < 3;
+                  const riskScore = llmSeverityData?.severityScore || triggeredCount * 25;
+                  const isHighRisk = riskScore >= 70;
+                  const isMediumRisk = riskScore >= 40 && riskScore < 70;
                   
                   return (
                     <>
@@ -350,20 +378,20 @@ export function WorkflowView({ claim }: WorkflowViewProps) {
                         <p className="text-xs font-medium text-foreground mb-2">Analysis Summary</p>
                         <ul className="space-y-2 text-sm text-muted-foreground">
                           <li className="flex items-start gap-2">
-                            <Zap className={`w-4 h-4 mt-0.5 ${triggeredCount === 0 ? 'text-success' : 'text-warning'}`} />
-                            <span>Weather conditions verified for date/location of loss</span>
-                          </li>
-                          <li className="flex items-start gap-2">
-                            <Zap className={`w-4 h-4 mt-0.5 ${rulesData.find(r => r.id === 'R007')?.triggered ? 'text-destructive' : 'text-success'}`} />
-                            <span>Vehicle identification {rulesData.find(r => r.id === 'R007')?.triggered ? 'flagged - possible theft report' : 'confirmed, no theft reports'}</span>
-                          </li>
-                          <li className="flex items-start gap-2">
-                            <Zap className={`w-4 h-4 mt-0.5 ${rulesData.find(r => r.id === 'R011')?.triggered ? 'text-destructive' : 'text-success'}`} />
-                            <span>Claim amount {rulesData.find(r => r.id === 'R011')?.triggered ? 'exceeds vehicle value' : 'consistent with damage type'}</span>
+                            <Zap className={`w-4 h-4 mt-0.5 ${rulesData.find(r => r.id === 'R002')?.triggered ? 'text-destructive' : 'text-success'}`} />
+                            <span>Weather conditions {rulesData.find(r => r.id === 'R002')?.triggered ? 'mismatch with narrative' : 'verified for date/location of loss'}</span>
                           </li>
                           <li className="flex items-start gap-2">
                             <Zap className={`w-4 h-4 mt-0.5 ${rulesData.find(r => r.id === 'R003')?.triggered ? 'text-destructive' : 'text-success'}`} />
-                            <span>{rulesData.find(r => r.id === 'R003')?.triggered ? 'Multiple claims detected in 30-day window' : 'No suspicious patterns in claims history'}</span>
+                            <span>VIN verification {rulesData.find(r => r.id === 'R003')?.triggered ? 'failed - make/model mismatch' : 'confirmed, no issues'}</span>
+                          </li>
+                          <li className="flex items-start gap-2">
+                            <Zap className={`w-4 h-4 mt-0.5 ${rulesData.find(r => r.id === 'R009')?.triggered ? 'text-destructive' : 'text-success'}`} />
+                            <span>Claim amount {rulesData.find(r => r.id === 'R009')?.triggered ? 'disproportionately high vs vehicle value' : 'consistent with damage type'}</span>
+                          </li>
+                          <li className="flex items-start gap-2">
+                            <Zap className={`w-4 h-4 mt-0.5 ${rulesData.find(r => r.id === 'R011')?.triggered ? 'text-destructive' : 'text-success'}`} />
+                            <span>{rulesData.find(r => r.id === 'R011')?.triggered ? 'Damage description does not match evidence' : 'Damage description matches submitted evidence'}</span>
                           </li>
                         </ul>
                       </div>
@@ -371,7 +399,9 @@ export function WorkflowView({ claim }: WorkflowViewProps) {
                       <div className="pt-2 border-t border-border">
                         <p className="text-xs text-muted-foreground">
                           Recommendation: <span className="font-medium text-foreground">
-                            {isHighRisk ? 'Reject or escalate for investigation' : isMediumRisk ? 'Manual review recommended' : 'Approve for standard processing'}
+                            {llmSeverityData?.recommendation === 'REJECT' ? 'Reject or escalate for investigation' 
+                              : llmSeverityData?.recommendation === 'REVIEW' || llmSeverityData?.recommendation === 'ESCALATE' ? 'Manual review recommended' 
+                              : 'Approve for standard processing'}
                           </span>
                         </p>
                       </div>
